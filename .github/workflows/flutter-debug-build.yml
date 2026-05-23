@@ -1,0 +1,67 @@
+name: Flutter Debug Build (arm64-v8a)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Debug APK (arm64-v8a)
+        run: |
+          echo "Starting Flutter debug build for arm64-v8a..."
+          flutter build apk --debug --target-platform android-arm64 --verbose 2>&1 | tee build_log.txt
+
+      - name: Report Build Failure
+        if: failure()
+        run: |
+          echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "#### Last 50 lines of build log:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -n 50 build_log.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "Please download the **build-logs** artifact for the full report." >> $GITHUB_STEP_SUMMARY
+
+      - name: Report Build Success
+        if: success()
+        run: |
+          echo "### ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
+          echo "The **app-debug-arm64-v8a** APK is ready for download in the artifacts." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Build Log (Always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build_log.txt
+
+      - name: Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-arm64-v8a
+          path: build/app/outputs/flutter-apk/app-debug.apk
