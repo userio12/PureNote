@@ -1,30 +1,47 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-
+import 'package:drift/native.dart';
 import 'package:purenote/main.dart';
+import 'package:purenote/core/database/database.dart';
+import 'package:purenote/core/providers/database_provider.dart';
+import 'package:purenote/core/providers/settings_provider.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App renders with bottom navigation', (WidgetTester tester) async {
+    final db = AppDatabase(NativeDatabase.memory());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWith((ref) => db),
+          settingsNotifierProvider.overrideWith(
+            () => _TestSettingsNotifier(),
+          ),
+        ],
+        child: const PurenoteApp(),
+      ),
+    );
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Notes'), findsAtLeastNWidgets(1));
+    expect(find.text('Tasks'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+
+    await db.close();
   });
+}
+
+class _TestSettingsNotifier extends SettingsNotifier {
+  @override
+  AppSettings build() => const AppSettings();
+
+  @override
+  Future<void> load() async {}
+
+  @override
+  Future<void> update(AppSettings newSettings) async {
+    state = newSettings;
+  }
 }

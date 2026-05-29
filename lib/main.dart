@@ -1,122 +1,149 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:home_widget/home_widget.dart';
+import 'package:workmanager/workmanager.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:purenote/core/error/global_error_handler.dart';
+import 'package:purenote/core/routing/app_router.dart';
+import 'package:purenote/core/services/attachment_service.dart';
+import 'package:purenote/core/services/backup_service.dart';
+import 'package:purenote/core/services/notification_service.dart';
+import 'package:purenote/core/services/widget_service.dart';
+import 'package:purenote/core/theme/app_theme.dart';
+import 'package:purenote/core/database/database.dart';
+import 'package:purenote/core/providers/database_provider.dart';
+import 'package:purenote/core/providers/settings_provider.dart';
+import 'package:purenote/features/lock/providers/lock_state_provider.dart';
+import 'package:purenote/features/lock/screens/pin_entry_screen.dart';
 
-void main() {
-  runApp(const MyApp());
+const _backupTaskName = 'purenote-backup';
+
+@pragma('vm:entry-point')
+void backupCallbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    if (task == _backupTaskName) {
+      try {
+        final db = AppDatabase.noDb();
+        final service = BackupService(db);
+        await service.createBackup(includeFiles: false);
+        await db.close();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  GlobalErrorHandler.init();
 
-  // This widget is the root of your application.
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = const String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+      options.tracesSampleRate = 0.0;
+      options.enableNdkScopeSync = true;
+    },
+    appRunner: () async {
+      await NotificationService.init();
+      HomeWidget.registerInteractivityCallback(widgetBackgroundCallback);
+      await Workmanager().initialize(backupCallbackDispatcher);
+      await Workmanager().registerPeriodicTask(
+        _backupTaskName,
+        _backupTaskName,
+        frequency: const Duration(hours: 24),
+        constraints: Constraints(networkType: NetworkType.connected),
+        existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      );
+      runApp(
+        const ProviderScope(
+          child: PurenoteApp(),
+        ),
+      );
+    },
+  );
+}
+
+class PurenoteApp extends ConsumerStatefulWidget {
+  const PurenoteApp({super.key});
+
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
-  }
+  ConsumerState<PurenoteApp> createState() => _PurenoteAppState();
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
+class _PurenoteAppState extends ConsumerState<PurenoteApp> with WidgetsBindingObserver {
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    Future.microtask(() async {
+      ref.read(settingsNotifierProvider.notifier).load();
+      final dao = ref.read(noteDaoProvider);
+      WidgetService.updateWidgetData(dao);
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      final attachmentDao = ref.read(attachmentDaoProvider);
+      final attachmentService = AttachmentService(attachmentDao);
+      await attachmentService.cleanOrphans();
+      await _clearTempDir();
     });
   }
 
   @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.read(lockStateProvider.notifier).checkAndLock();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+    final settings = ref.watch(settingsNotifierProvider);
+    final isLocked = ref.watch(lockStateProvider);
+
+    return Stack(
+      textDirection: TextDirection.ltr,
+      children: [
+        MaterialApp.router(
+          title: 'purenote',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light(),
+          darkTheme: AppTheme.dark(),
+          themeMode: settings.themeMode,
+          routerConfig: appRouter,
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
+        if (isLocked)
+          PinEntryScreen(
+            onUnlock: () {
+              ref.read(lockStateProvider.notifier).unlock();
+            },
+          ),
+      ],
     );
+  }
+
+  Future<void> _clearTempDir() async {
+    try {
+      final tempDir = Directory.systemTemp;
+      if (await tempDir.exists()) {
+        final contents = await tempDir.list().toList();
+        for (final entity in contents) {
+          if (entity is File) {
+            try { await entity.delete(); } catch (_) {}
+          } else if (entity is Directory) {
+            try { await entity.delete(recursive: true); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
   }
 }
