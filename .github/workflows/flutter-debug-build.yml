@@ -33,7 +33,7 @@ jobs:
         run: |
           set -o pipefail
           flutter build apk --debug --target-platform android-arm64 2>&1 | tee build_log.txt
-          echo "APK_OUTPUT=$(ls build/app/outputs/flutter-apk/)" >> "$GITHUB_ENV"
+          echo "APK_COUNT=$(find build/app/outputs/flutter-apk/ -name '*.apk' | wc -l)" >> "$GITHUB_ENV"
 
       - name: Report Build Failure
         if: failure()
@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           echo "### ✅ Build Successful" >> "$GITHUB_STEP_SUMMARY"
-          echo "Files in output: $APK_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK files found: $APK_COUNT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Build Log (Always)
         if: always()
